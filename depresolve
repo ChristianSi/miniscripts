@@ -1,0 +1,19 @@
+#!/bin/ksh
+# Iterates over the arguments and resolves their dependencies (in
+# Debian-based systems).
+for file in "$@"
+do
+    echo "$file dependencies:"
+    deps=""
+    for word in `ldd $file`
+    do
+        # Iterate over ldd output: words starting with '/' are deps
+        if [[ ${word:0:1} == '/' ]]
+        then
+            # The library is the part before the ":"
+            deps="$deps `dpkg -S $word|cut -f 1 -d :`"
+        fi
+    done
+    # Print libraries in alphabetic order, without duplicates
+    echo $deps|tr ' ' '\n'|sort -u
+done

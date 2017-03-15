@@ -1,0 +1,39 @@
+#!/bin/bash
+# Copyleft 2006-2007 by Christian Siefkes <christian@siefkes.net>.
+# Creates a listing of a directory in HTML format. Requires txt2html.
+# First arguments is the directory to process; second is the type of files
+# to show - set to 'd' to show only directories, omit to show all files.
+
+# Check that we have enough arguments
+if (($# < 1 ))
+then
+  echo "Usage: listdir.sh DIRECTORY [FILETYPE]"
+  exit 1
+fi
+
+# File type given?
+if (($# >= 2))
+then
+  FINDCMD="find . -type $2"
+else
+  FINDCMD="find ."
+fi
+
+# Create listing
+STARTDIR=$PWD
+BASENAME=`basename $1`
+OUTFILEBASE=dirlist-$BASENAME
+OUTFILETEXT=$PWD/$OUTFILEBASE.txt
+OUTFILEHTML=$PWD/$OUTFILEBASE.html
+cd $1 &&
+printf "%% $BASENAME\n\n" > $OUTFILETEXT &&
+# List all matching files. Prepend a suitably indented list marker (-) to
+# each line. Replace underscores by spaces and remove file extensions
+# (including double extensions for subtitle files + splitted files).
+# Remove (then) duplicate lines. Exclude the directory itself ('.') and
+# CD/DVD-specific files (such as "AUDIO TS", "VIDEO TS ").
+$FINDCMD|sort|perl -pe 's|[^\/]+\/|    |g; s/^( *) /$1- /; s/_/ /g; s/(\.\w{2,3})?\.\w+$//'|
+uniq|egrep -vi "(^\.$|AUDIO TS|VIDEO TS|VTS 0|JACKET P|J00)" >> $OUTFILETEXT &&
+pandoc -s $OUTFILETEXT -o $OUTFILEHTML &&
+echo "Created directory listing for $1"
+#rm -f $OUTFILE

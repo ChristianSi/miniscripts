@@ -1,0 +1,21 @@
+#!/bin/bash
+# Download a single file using curl; usage: cget URL [localfilename].
+# Like wget (and different from normal curl) it's not necessary to specify
+# options; if no explicit localfilename is specified, the filename part of
+# the URL is used.
+# If the file with the specified name already exists, it is assumed to be an
+# incomplete download; the rest of the file will be downloaded and appended.
+OPTS=(--compressed -C - --retry 5 -f)
+if (($# == 1 )); then
+    # Calculate outname ourselves instead of using curl's -O since curl
+    # doesn't resolve percent-encoding in URLs.
+    outname=$(basename "$1" | echo -e "$(sed 's/+/ /g; s/%/\\x/g')")
+elif (($# == 2 )); then
+    outname="$2"
+else
+    echo "Usage: cget URL [localfilename]"
+    exit 1
+fi
+echo "Downloading $1 to '$outname'"
+curl "${OPTS[@]}" -o "$outname" "$1" &&
+echo "Downloaded $1 to '$outname'" || echo "Couldn't download $1"

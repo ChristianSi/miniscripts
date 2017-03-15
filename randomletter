@@ -1,0 +1,7 @@
+#!/usr/bin/env lua
+-- Copyright 2006 Christian Siefkes. No rights reserved.
+-- Usage: randomletter.lua. Generates a random letter [a-z].
+math.randomseed(os.time())
+local randNum = math.random(0, 25) -- range [0, 25]
+-- convert to range ['a', 'z']
+print(string.char(string.byte("a") + randNum))

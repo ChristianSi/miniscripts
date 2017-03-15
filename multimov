@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+# Copyright (C) 2011-2013 Christian Siefkes.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to permit
+# persons to whom the Software is furnished to do so, subject to the
+# following conditions:
+#
+# The above copyright notice and this permission notice shall be included
+# in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+# NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+# USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+multimov - move a specified number of files with the same extension at once
+"""
+
+
+from os import extsep, getcwd, listdir, makedirs
+from os.path import isdir
+from shutil import move
+from sys import argv, exit, stderr
+
+
+def multimov(filecount, extension, targetdir):
+    """
+    Moves up to *filecount* files with the specified *extension*
+    (case-insensitive) from the current directory into the *targetdir*.
+    """
+    # Add dot if needed
+    if not extension.startswith(extsep):
+        extension = extsep + extension
+    lowerextension = extension.lower()
+
+    # Filter matching files and sort them alphabetically
+    allfiles = listdir(getcwd())
+    matchingfiles =\
+        [file for file in allfiles if file.lower().endswith(lowerextension)]
+    matchingfiles.sort()
+    actualcount = min(filecount, len(matchingfiles))
+    if actualcount <= 0:
+        _exiterror("No files to move")
+
+    # Try to create targetdir if it's not an existing directory
+    if not isdir(targetdir):
+        try:
+            makedirs(targetdir)
+        except OSError as e:
+            _exiterror("Can't create target directory {}: {}".format(
+                targetdir, e))
+
+    # Move first actualcount files into targetdir
+    for i in range(actualcount):
+        move(matchingfiles[i], targetdir)
+
+
+def _exiterror(msg):
+    """Print an error message and exit."""
+    fullmsg =\
+"""Error: {}
+Usage: multimov FILECOUNT EXTENSION TARGETDIR: move the specified number
+       of files with the given extension to the target directory.""".format(
+          msg)
+    print(fullmsg, file=stderr)
+    exit(1)
+
+
+# main block
+if __name__ == "__main__":
+    # Read 3 arguments: filecount, extension, targetdir
+    if len(argv) == 4:
+        rawfilecount = argv[1]
+        extension = argv[2]
+        targetdir = argv[3]
+
+        try:
+            filecount = int(rawfilecount)
+        except ValueError:
+            _exiterror("FILECOUNT is not a number: {}".format(rawfilecount))
+
+        multimov(filecount, extension, targetdir)
+    else:
+        _exiterror("{} argument(s) instead of 3".format(len(argv) -1))

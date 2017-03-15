@@ -1,0 +1,16 @@
+#!/bin/sh
+# Copyleft 2012 by Christian Siefkes <christian@siefkes.net>.
+# No rights reserved.
+
+# Changes the paper format of one or more ODT documents to A4.
+# Specify the files to modify as command-line arguments.
+
+STYLEFILE="styles.xml"
+TMPDIR="/tmp"
+
+for file in "$@"; do
+    unzip -q "$file" "$STYLEFILE" -d "$TMPDIR" &&
+    perl -i -pe 's/fo:page-width=".*?"/fo:page-width="21.0cm"/g;
+        s/fo:page-height=".*?"/fo:page-height="29.7cm"/g;' "$TMPDIR/$STYLEFILE" &&
+    zip -mjq "$file" "$TMPDIR/$STYLEFILE"
+done

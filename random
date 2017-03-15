@@ -1,0 +1,59 @@
+#!/usr/bin/perl -CA
+
+use 5.012;  # use newer features such as "say"; implies "use strict"
+use open qw(:std :utf8);  # use UTF-8 for all I/O (by default)
+use utf8;                 # allow UTF-8 in source code
+use warnings;             # warn if doing silly things
+
+my $result;
+
+if (@ARGV) {
+    $result = int(rand($ARGV[0]));  # at least one argument
+    $result += $ARGV[1] if @ARGV > 1;  # two arguments
+} else {
+    $result = rand;                    # no arguments
+}
+
+say $result;
+
+=head1 NAME
+
+random - return a random number
+
+=head1 SYNOPSIS
+
+    random
+
+Returns a random real in the range [0, 1).
+
+    random N
+
+Returns a random integer in the range [0, N).
+
+    random N OFFSET
+
+Returns a random integer in the range [OFFSET, OFFSET+N).
+
+=head1 PREREQUISITES
+
+Just Perl itself, version 5.12 or later.
+
+=head1 AUTHOR
+
+Christian Siefkes <christian@siefkes.net>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2014 Christian Siefkes
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

@@ -1,0 +1,389 @@
+#!/usr/bin/perl -CA
+
+use 5.010;                # use new features such as "say"
+use open qw(:std :utf8);  # use UTF-8 for all I/O (by default)
+use strict;               # forbid unsafe constructs
+use utf8;                 # allow UTF-8 in source code
+use warnings;             # warn if doing silly things
+
+use File::Spec::Functions qw(catfile curdir);
+use Text::Wrap 'wrap';
+
+use YAML::Tiny;
+
+# The extension of the text files written by this program
+use constant TXT_EXT => 'txt';
+
+sub shellescape {
+    my $str = shift;
+    $str =~ s/'/'\\''/g;
+    return "'$str'";
+}
+
+sub validate_and_write_bins_metadata {
+    my ($directory, $title, $description, $sample, $binsfh) = @_;
+    if (!$title && $description) {
+        die "Album $directory has a description but no title!\n";
+    }
+    if (!$title && $sample) {
+        die "Album $directory has a sample but no title!\n";
+    }
+    if ($binsfh && $title) {
+        my $binscmd =
+              "bins_edit -a "
+            . shellescape($directory) . " -t "
+            . shellescape($title);
+        $binscmd .= " --shortdesc " . shellescape($description)
+            if $description;
+        $binscmd .= " --sample " . shellescape($sample) if $sample;
+        say $binsfh $binscmd;
+    }
+}
+
+sub create_outdir_if_necessary {
+    my $outdir = shift;
+    unless (-e $outdir) {
+        mkdir $outdir;
+        say "Created directory: $outdir";
+    }
+}
+
+# normalize_space $str: Removes whitespace from start and end of $str and
+# replaces all inner whitespace sequences by a single space.
+sub normalize_space {
+    my $str = shift // '';
+    $str =~ s/^\s+//;
+    $str =~ s/\s+$//;
+    $str =~ s/\s+/ /g;
+    return $str;
+}
+
+# lcsuffix $filename: Returns the suffix (the part after the last dot) of
+# $filename, converted to lowercase. Returns the empty string if $filename
+# doesn't contain any dots.
+sub lcsuffix {
+    my $filename = shift;
+    my $lastdot = rindex $filename, '.';
+    return '' if $lastdot < 0;
+    my $suffix = substr $filename, $lastdot + 1;
+    return lc $suffix;
+}
+
+# print_nonempty_list $explLine @list: Prints @list prefixed by the $explLine
+# explanatory line, if @list is not empty. All lines except the first are
+# indented 4 spaces; items are separated by commas.
+# Prints nothing if @list is empty.
+sub print_nonempty_list {
+    my $explLine = shift;
+    if (@_) {
+        say $explLine;
+        say(wrap('    ', '    ', join ', ', @_));
+    }
+}
+
+# Iterate *.txt files and delete obsolete ones. For safety reasons, we only
+# delete "IMAGENAME.JPG.txt" if a corresponding "IMAGENAME.JPG" exists, but
+# has no caption entry (otherwise we would delete arbitrary *.txt files).
+sub delete_obsolete_captions {
+    my ($outdir, $capsetref) = @_;
+    opendir my $capdh, $outdir
+        or die "Cannot read files in $outdir directory: $!\n";
+    my @capTxtFiles = grep { (lcsuffix $_) eq TXT_EXT } readdir $capdh;
+    closedir $capdh;
+
+    my $extLen = 1 + length TXT_EXT;
+    my ($basename, $capTxtFilePath);
+
+    for my $capTxtFile (@capTxtFiles) {
+        $basename = substr $capTxtFile, 0, -$extLen;
+        if (!exists($capsetref->{$basename}) && -e "$outdir/$basename") {
+            $capTxtFilePath = catfile $outdir, $capTxtFile;
+            unlink $capTxtFilePath
+                or warn "Could not delete $capTxtFilePath: $!\n";
+            say "Deleted obsolete $capTxtFilePath";
+
+            # Also delete corresponding xml file (if created by bins_edit)
+            my $xmlfile = "$outdir/$basename.xml";
+            if (-e $xmlfile) {
+                unlink $xmlfile or warn "Could not delete $xmlfile $!\n";
+            }
+        }
+    }
+}
+
+sub open_bins_file_and_write_header {
+    my $binsfile = shift;
+    return undef unless $binsfile;
+    open(my $binsfh, '>', $binsfile)
+        or die "Could not open file $binsfile for writing: $!\n";
+    print $binsfh <<'END';
+#!/bin/sh
+# DON'T EDIT THIS FILE, EDIT captions.txt INSTEAD AND CALL
+# fehcaptionwriter TO RE-GENERATE IT.
+# Execute this file to create XML metadata files for bins.
+END
+    return $binsfh;
+}
+
+# Determine the description to use for feh. If $first is true and there is a
+# $title, it will be prepended (in upper case) to the actual description
+# (if any).
+sub fehdesc {
+    my ($first, $title, $desc) = @_;
+    if ($first && $title) {
+        if ($desc) {
+            return uc($title) . ": $desc";
+        } else {
+            return uc $title;
+        }
+    }
+    return $desc;
+}
+
+sub write_bins_command_for_image {
+    my ($binsfh, $imagepath, $desc) = @_;
+    if ($binsfh && $desc) {
+        my $escaped_desc = shellescape $desc;
+        say $binsfh "bins_edit " . shellescape($imagepath)
+            . " -t $escaped_desc -d $escaped_desc";
+    }
+}
+
+# write_captions_for_dir $directory, $hashref, $binsfh: Updates the feh
+# captions for $directory. $hashref is a reference to a hash that should looks
+# like:
+#
+#     (
+#         '.title' => 'Album Title',
+#         '.desc' => 'Album Description',
+#         '.sample' => 'Sample picture',
+#         'pic1.jpg' => 'Description for pic1'
+#         'pic2.jpg' => 'Description for pic2'
+#         ...
+#     )
+#
+# The '.desc' and '.sample' keys are optional. '.title' can be omitted, but
+# only if they are omitted as well.
+#
+# If $binsfh exists, commands to generate XML metadata files for bins will be
+# written to that file handle.
+sub write_captions_for_dir {
+    my ($directory, $hashref, $binsfh) = @_;
+    # We write captions files to the same directory to prevent bins from
+    # showing empty albums.
+    my $outdir      = $directory;
+    my $title       = normalize_space(delete $hashref->{'.title'});
+    my $description = normalize_space(delete $hashref->{'.desc'});
+    my $sample      = normalize_space(delete $hashref->{'.sample'});
+    my $first       = 1;
+
+    validate_and_write_bins_metadata $directory, $title, $description,
+        $sample, $binsfh;
+    create_outdir_if_necessary $outdir;
+
+    my ($outfile, $outfh, $suffix);
+    my (%suffixset, %capset, %emptyset, %missingset);
+
+    for my $image (sort keys %$hashref) {
+        my $desc      = normalize_space $hashref->{$image};
+        my $fehdesc   = fehdesc $first, $title, $desc;
+        my $imagepath = "$directory/$image";
+
+        # Skip and warn if image doesn't exist
+        unless (-e $imagepath) {
+            say "Warning: $imagepath doesn't exist!";
+            next;
+        }
+
+        if ($fehdesc) {
+            # Write description to IMAGENAME.txt
+            $outfile = catfile $outdir, "$image." . TXT_EXT;
+            open $outfh, '>', $outfile
+                and say $outfh $fehdesc
+                and close $outfh
+                or die "Cannot write $outfile: $!\n";
+            # Remember image name and suffix
+            $suffix = lcsuffix $image;
+            $suffixset{$suffix} = 1 if $suffix;
+            $capset{$image} = 1;
+        } else {
+            $emptyset{$image} = 1;
+        }
+
+        write_bins_command_for_image $binsfh, $imagepath, $desc;
+        $first = 0;
+    }
+
+    die "No image descriptions defined for album $directory!\n" if $first;
+
+    print_nonempty_list
+        "Note: images files with empty descriptions in $directory album:",
+        sort keys %emptyset;
+
+    print_nonempty_list "Wrote caption files for $directory album:",
+        sort keys %capset;
+
+    delete_obsolete_captions $outdir, \%capset;
+}
+
+# write_feh_captions $yamlfile, $binsfile: Reads the caption file
+# ($yamlfile) and writes corresponding mini text files for feh.
+# If $binsfile is defined, it (re-)creates that file as a script that can be
+# called to generate XML metadata files for a bins
+# <http://bins.sautret.org/> album.
+sub write_feh_captions {
+    my ($yamlfile, $binsfile) = @_;
+
+    my $yaml         = YAML::Tiny->read($yamlfile);
+    my $hashref      = $yaml->[0];
+    my $dotprocessed = 0;
+    my $binsfh       = open_bins_file_and_write_header $binsfile;
+    my %toplevelvalues;
+
+    for my $key (sort keys %$hashref) {
+        my $value = $hashref->{$key};
+        if (ref $value) {
+            write_captions_for_dir $key, $value, $binsfh;
+            $dotprocessed = 1 if $key eq '.';
+        } else {
+            # Collect key/scalar pairs for later processing
+            $toplevelvalues{$key} = $value;
+        }
+    }
+
+    # Any top-level key/scalar pairs refer to the working directory
+    if (%toplevelvalues) {
+        if ($dotprocessed) {
+            die "Spurious top-level scalars found, add them to the '.' "
+                . "album instead!\n";
+        }
+        write_captions_for_dir '.', \%toplevelvalues, $binsfh;
+    }
+
+    if ($binsfile) {
+        close $binsfh;
+        # Make file executable
+        my $perm = (stat $binsfile)[2] & 07777;
+        chmod $perm | 0111, $binsfile;
+        say "Call ./$binsfile to generate a bins album.";
+    }
+}
+
+# Main entry point
+write_feh_captions 'captions.yaml', 'generate-bins-metadata.sh';
+
+=head1 NAME
+
+fehcaptionwriter - write captions for the feh image viewer and for bins
+
+=head1 SYNOPSIS
+
+    fehcaptionwriter
+
+    feh -K .
+
+fehcaptionwriter must be called in a directory that contains at least one
+image file and a file called C<captions.yaml> that defines captions for some
+or all of the image files. The program will convert the captions to the format
+expected by feh (L<http://feh.finalrewind.org/>). It will also generate a file
+that helps you creating a bins (L<http://bins.sautret.org/>) web album.
+
+=head1 DESCRIPTION
+
+If you start feh with the B<-K .> option, it will display the captions
+generated by fehcaptionwriter below the images. The following options will
+start feh in fullscreen mode with images autozoomed to screen size:
+
+    feh -FZK .
+
+You can change the font used by feh for rendering captions via the B<-C> and
+B<-e> options, see the feh man page. fehcaptionwriter can also write captions
+for images in subdirectories (see L</"FILE FORMAT"> below), but feh won't show
+them by default. The following command will show all images in the current
+directory and subdirectories:
+
+    find . -type d | sort | xargs feh -FZK .
+
+fehcaptionwriter also facilities creating online photo albums via bins
+(L<http://bins.sautret.org/>). If you want to to this and have C<bins> and the
+accompanying C<bins_edit> program installed, call the
+C<generate-bins-metadata.sh> script generated by fehcaptionwriter. Afterwards,
+you can invoke bins from parent directory to generate the actual web album.
+Replace C<PHOTODIR> with the name of directory where you have stored your
+pictures (and invoked fehcaptionwriter) and C<WEBALBUMDIR> with the name of
+directory where you want to store the online album:
+
+    cd ..
+    mkdir WEBALBUMDIR
+    bins -p PHOTODIR WEBALBUMDIR
+
+=head1 FILE FORMAT
+
+The format of the C<captions.yaml> file is best demonstrated by example:
+
+    .title: Album title
+    .desc: Description of the album
+    .sample: IMG77.JPG
+    IMG1.JPG: This is a nice image
+    IMG2.JPG: >
+        This one is not so nice, but it has a rather longish caption (which
+        will be converted to a single long line for the benefit of feh)
+    IMG4.JPG: Assuming that IMG3.JPG also exists, it won't get a caption
+    IMG0.JPG: >
+        Needless to say (I hope), the order in which captions are listed
+        doesn't matter
+
+    subdir1:
+
+        .title: Title of subdirectory album
+        .desc: Description of subdirectory album
+        .sample: IMG99.JPG
+        IMG90.JPG: An image in this subdirectory
+        IMG95.JPG: >
+            Another image: descriptions that span multiple lines or contain a
+            colon must be prefixed by '>'
+
+I<.title>, I<.desc>, and I<.sample> give metadata about an album. I<.desc> and
+I<.sample> are only used for bins. I<.title> is also used for feh: it is
+converted to upper case and prepended to the description of the first image in
+the album. It's also possible to just leave the description of the first image
+empty, then just the capitalized album title will be used as description.
+(Specifying an empty description will trigger a warning in other cases.)
+
+All these metadata fields are optional, but if you specify I<.desc> or
+I<.sample>, you also have to specify I<.title>.
+
+C<captions.yaml> is a YAML file as accepted by L<YAML::Tiny>. YAML::Tiny only
+supports a subset of the full YAML syntax, but it should be enough for
+practical purposes. See the Wikipedia page on YAML
+(L<https://en.wikipedia.org/wiki/YAML>) and
+L<https://metacpan.org/pod/YAML::Tiny#YAML-TINY-SPECIFICATION> for a detailed
+description.
+
+You can include subdirectories with images in your C<captions.yaml> by nesting
+metadata and image descriptions below the name of the directory, as shown
+above. All image paths are given relative to the directory.
+
+=head1 PREREQUISITES
+
+L<YAML::Tiny>
+
+=head1 AUTHOR
+
+Christian Siefkes <christian@siefkes.net>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2012-2014 Christian Siefkes
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

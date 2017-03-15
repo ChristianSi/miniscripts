@@ -1,0 +1,92 @@
+#!/usr/bin/perl -CA
+
+use 5.010;                # use new features such as "say"
+use open qw(:std :utf8);  # use UTF-8 for all I/O (by default)
+use strict;               # forbid unsafe constructs
+use utf8;                 # allow UTF-8 in source code
+use warnings;             # warn if doing silly things
+
+use File::Basename 'basename';
+use Scalar::Util 'looks_like_number';
+
+use Date::Simple qw(date today);
+
+# printHelp $progname: Prints a help text (expects program name as argument).
+sub printHelp {
+    my $progname = shift;
+    print <<END;
+Usage: $progname [DATE] DAYS
+Adds DAYS to DATE and prints the result. DATE defaults to today if omitted.
+Sample: $progname 2012-09-04 51
+END
+}
+
+# Print help text when called with -h as first option or with too many or too
+# few arguments
+my $helpRequested = @ARGV && $ARGV[0] eq '-h';
+
+if ($helpRequested || @ARGV == 0 || @ARGV > 2) {
+    printHelp basename $0;
+    # Exit signaling success (0) if -h was specified,
+    # otherwise signaling failure (-1)
+    exit($helpRequested - 1);
+}
+
+my $days = $ARGV[-1];
+die "Not a number: $days!\n" unless looks_like_number $days;
+
+my $date;
+if (@ARGV > 1) {
+    $date = date $ARGV[0] or die "Not a valid date: $ARGV[0]!\n";
+} else {
+    $date = today;
+}
+
+say $date + $days;
+
+=head1 NAME
+
+dateadd - add a number of days to a specific date
+
+=head1 SYNOPSIS
+
+    dateadd DATE DAYS
+    dateadd DAYS
+
+Adds DAYS to DATE and prints the result. DATE must be an ISO-formatted date.
+DAYS must be a negative or positive integer number. DATE defaults to today if
+omitted.
+
+=head1 SAMPLES
+
+Print the date 51 days after 4 September 2012 (25 October 2012):
+
+    dateadd 2012-09-04 51
+
+Print yesterday's date:
+
+    dateadd -1
+
+=head1 PREREQUISITES
+
+L<Date::Simple>
+
+=head1 AUTHOR
+
+Christian Siefkes <christian@siefkes.net>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2012 Christian Siefkes
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

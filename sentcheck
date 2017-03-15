@@ -1,0 +1,201 @@
+#!/usr/bin/perl -CA
+
+use 5.012;  # use newer features such as "say"; implies "use strict"
+use open qw(:std :utf8);  # use UTF-8 for all I/O (by default)
+use utf8;                 # allow UTF-8 in source code
+use warnings;             # warn if doing silly things
+
+use Getopt::Long qw(:config bundling);
+use Pod::Usage;
+
+use Lingua::Sentence;     # break text paragraphs into sentences
+
+# split_blocks $str: splits a paragraph of text into multiple blocks.
+# Lines starting with one of the characters -+*%:~| , followed by whitespace
+# and optionally preceded by whitespace, indicate the start of a new block
+# (typically they mark a new list item or other block markup in Markdown).
+# Returns a list which will contain just a single element if no such block
+# markers were found.
+sub split_blocks {
+    return split /\s*\n\s*(?=[-+*%:~|]\s+)/, shift;
+}
+
+# normalize_formatting $str: delete some Markdown formatting and collapse URLs
+# to just a single word.
+sub normalize_formatting {
+    my $block = shift;
+    # Remove '*' (Markdown formatting symbol) from block since it
+    # confuses the sentence splitter
+    $block =~ s/\*//g;
+    # Replace "[text](URL]" links (Markdown syntax) by just "text"
+    $block =~ s#\[([^][]+)\]\([a-z]+://[^\s)]+\)#$1#g;
+    # Replace an URL or email address in <...> by just "<URL>"
+    $block =~ s#<[a-z]+(://|@)[^\s>]+>#<URL>#g;
+    return $block;
+}
+
+# normalize_space $str: removes whitespace from start and end of $str and
+# replaces all inner whitespace sequences by a single space.
+sub normalize_space {
+    return join " ", split(" ", shift);
+}
+
+# check_sentences $infh, $lang, $max_words, $max_interrupts: splits the text
+# read from $infh filehandle into sentences and warns if some of them look
+# overly complex. $lang is the language of the text as a 2-letter ISO code
+# (e.g. "en" or "de"). A sentence is considered overly complex if contains
+# more than $max_words words or more than $max_interrupts breaks (commas,
+# semicolons, colons, dashes, opening and closing parentheses).
+sub check_sentences {
+    my ($infh, $lang, $max_words, $max_interrupts) = @_;
+    my $splitter = Lingua::Sentence->new($lang);
+    local $/ = "";  # read file in paragraph mode
+
+    while (my $para = <$infh>) {
+        # Split paragraphs in blocks
+        my @blocks = split_blocks $para;
+
+        for my $block (@blocks) {
+            # Normalize Markdown formatting and whitespace in block
+            $block = normalize_formatting $block;
+            $block = normalize_space $block;
+            # Split block into sentences (separated by linebreaks)
+            my $sentences = $splitter->split($block);
+
+            for my $sentence (split /\n/, $sentences) {
+                my $showsent = 0;
+
+                # Count number of words (sequences of letters and numbers,
+                # single dashes are allowed between letters or numbers,
+                # multiple dashes only between numbers
+                my $wordcount = () =
+                    ($sentence =~ /(?:\pN--+\pN|[\pL\pN](?:-[\pL\pN])?)+/g);
+
+                if ($wordcount > $max_words) {
+                    print "$wordcount words";
+                    $showsent = 1;
+                }
+
+                # Count number of interruptions (commas, semicolons etc.
+                # followed by another word)
+                my $interrupts = () =
+                    ($sentence =~ /(?:[,;:()–—]|--[-\s])[*\s]*[\pL\pN]/g);
+
+                if ($interrupts > $max_interrupts) {
+                    print ", " if $showsent;
+                    print "$interrupts interruptions";
+                    $showsent = 1;
+                }
+
+                say ": $sentence" if $showsent;
+            }
+        }
+    }
+}
+
+# Set-up and parse options
+my $lang           = "en";
+my $max_words      = 15;
+my $max_interrupts = 3;
+my $help           = 0;
+
+GetOptions(
+    "lang|l=s"       => \$lang,
+    "words|w=i"      => \$max_words,
+    "interrupts|i=i" => \$max_interrupts,
+    "help|h"         => \$help
+) or die "Option parsing failed!\n";
+
+if ($help) {
+    pod2usage(
+        -exitval   => 0,
+        -verbose   => 99,
+        -noperldoc => 1,
+        -sections  => "NAME|SYNOPSIS|OPTIONS|DESCRIPTION"
+    );
+}
+
+# Iterate over filenames listed on command line, if any
+for my $infile (@ARGV) {
+    open my $infh, "<", $infile or die "Cannot open $infile: $!\n";
+    check_sentences $infh, $lang, $max_words, $max_interrupts;
+    close $infh;
+}
+
+# Otherwise process stdin
+check_sentences *STDIN, $lang, $max_words, $max_interrupts unless @ARGV;
+
+=head1 NAME
+
+sentcheck - warn if a text contains overly complex sentences
+
+=head1 SYNOPSIS
+
+sentcheck [options] [file ...]
+
+ Options:
+   -h, --help                       print brief help message
+   -l, --lang=LANGUAGE              language of the text
+   -w, --words=MAX_WORDS            the maximum number of words allowed
+   -i, --interrupts=MAX_INTERRUPTS  the maximum number of breaks allowed
+
+=head1 OPTIONS
+
+=over
+
+=item B<--h>, B<---help>
+
+Prints a brief help message and exits.
+
+=item B<--l>, B<---lang>=LANGUAGE
+
+Specify the language of the text as a 2-letter ISO code, e.g. "en" for English
+or "de" for German.
+
+Default: en
+
+=item B<--w>, B<---words>=MAX_WORDS
+
+Specify the maximum number of words allowed in each sentence.
+
+Default: 15
+
+=item B<--w>, B<---words>=MAX_INTERRUPTS
+
+Specify the maximum number of breaks allowed in each sentence. Each comma,
+semicolon, colon, dash, opening or closing parenthesis followed by more words
+is considered a break.
+
+Default: 3
+
+=back
+
+=head1 DESCRIPTION
+
+sentcheck analyses the specified files (or stdin if no files are given) and
+prints a warning for every sentence that contains too many words or
+interruptions.
+
+=head1 PREREQUISITES
+
+L<Lingua::Sentence>
+
+=head1 AUTHOR
+
+Christian Siefkes <christian@siefkes.net>
+
+=head1 COPYRIGHT
+
+Copyright (c) 2014 Christian Siefkes
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
