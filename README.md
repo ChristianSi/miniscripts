@@ -8,12 +8,12 @@ Perl or other scripting languages.
   * **biasedshuffle:** Randomly shuffle a list of values, preferring values
     from the begin of the list. Values are weighted according to the
     Fibonacci series. Perl script.
-  * **cget:** Download a single file using curl. If the file with the
+  * **cget:** Download a single file using curl. If a file with the
     specified name already exists, it is assumed to be an incomplete
     download; the rest of the file will be downloaded and appended. Bash
     shell script.
   * **dateadd:** Add a number of days to a specific date. Perl script.
-  * **depresolve:** Resolves the dependencies of a list of files (in
+  * **depresolve:** Resolve the dependencies of a list of files (in
     Debian-based systems). KornShell (ksh) script.
   * **fehcaptionwriter:** Write captions for the [feh image
     viewer](http://feh.finalrewind.org/) and/or the [bins album
@@ -44,6 +44,6 @@ License](https://en.wikipedia.org/wiki/ISC_license) or [MIT
 License](https://en.wikipedia.org/wiki/MIT_License) or otherwise placed in
 the [public domain](https://en.wikipedia.org/wiki/Public_domain) ("no
 rights reserved, use as you like"). Script files in this repository that
-don't specifying a specific license are herewith placed in the public domain
+don't specify a specific license are herewith placed in the public domain
 -- they may be used by anybody for any purpose without requiring
 attribution or anything else.
