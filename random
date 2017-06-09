@@ -5,13 +5,33 @@ use open qw(:std :utf8);  # use UTF-8 for all I/O (by default)
 use utf8;                 # allow UTF-8 in source code
 use warnings;             # warn if doing silly things
 
+use Scalar::Util 'looks_like_number';
+
 my $result;
 
 if (@ARGV) {
-    $result = int(rand($ARGV[0]));  # at least one argument
-    $result += $ARGV[1] if @ARGV > 1;  # two arguments
+    # At least one argument
+    my $first = $ARGV[0];
+    my $offset = @ARGV > 1 ? $ARGV[1] : 0;  # offset may be 2nd argument
+    my $limit;
+
+    if (looks_like_number $first) {
+        $limit = $first;
+    } elsif ($first =~ /^(\d+)(?:[–-]|\.\.)(\d+)$/) {
+        my $lower = $1;
+        my $upper = $2;
+        ($lower, $upper) = ($upper, $lower) if $lower > $upper;
+        $offset = $lower;
+        $limit = $upper - $lower;
+    } else {
+        die "Unexpected argument (not an integer or range): $first\n";
+    }
+
+    $result = int(rand $limit);
+    $result += $offset;
 } else {
-    $result = rand;                    # no arguments
+    # No arguments
+    $result = rand;
 }
 
 say $result;
@@ -33,6 +53,15 @@ Returns a random integer in the range [0, N).
     random N OFFSET
 
 Returns a random integer in the range [OFFSET, OFFSET+N).
+
+    random LOWER-UPPER
+    random LOWER–UPPER
+    random LOWER..UPPER
+
+Returns a random integer in the range [LOWER, UPPER). A hyphen (-), a dash (–),
+or two dots (..) may be used as separators. If UPPER is smaller than LOWER, the specified
+limits are switched automatically. Note that the lower limit is inclusive, while the upper
+one is exclusive.
 
 =head1 PREREQUISITES
 
