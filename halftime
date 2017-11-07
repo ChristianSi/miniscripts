@@ -1,0 +1,60 @@
+#!/usr/bin/python3
+"""Print half the time between now and 22:00 (10 pm), or between other specified times.
+
+Copyright (c) 2014--17 Christian Siefkes
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+"""
+
+import argparse
+from datetime import date, datetime, time
+
+
+def format_time(t: time) -> str:
+    """"Format a time or datetime as 'HH:MM:SS'."""
+    return t.strftime('%H:%M:%S')
+
+
+def halftime(start: str = None, end: str = None) -> time:
+    """
+    Return half the time from *start* to *end*.
+    Parameters:
+
+    * start: the start time in 'HH:MM' format; e.g. '09:01'; defaults to the current time
+    * end: the end time in 'HH:MM' format; defaults to '22:00'
+    """
+    if start is None:
+        startdate = datetime.now()
+    else:
+        startdate = datetime.combine(date.today(), datetime.strptime(start, '%H:%M').time())
+    if end is None:
+        end = '22:00'
+    endtime = datetime.strptime(end, '%H:%M').time()
+    delta = datetime.combine(date.today(), endtime) - startdate
+    target_dt = startdate + delta / 2
+    return target_dt.time()
+
+
+if __name__ == '__main__':
+    try:
+        parser = argparse.ArgumentParser(description='Print half the time between now and '
+                + '22:00 (10 pm), or between other specified times.')
+        parser.add_argument('-f', '--from', dest='start',
+                           help="the start time in 'HH:MM' format (defaults to the current time)")
+        parser.add_argument('-t', '--to', dest='end',
+                           help="the end time in 'HH:MM' format (defaults to '22:00')")
+        args = parser.parse_args()
+        print(format_time(halftime(args.start, args.end)))
+    except Exception as e:
+        error_desc = '{}: {}'.format(e.__class__.__name__, e)
+        exit(error_desc)

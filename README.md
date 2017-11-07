@@ -22,6 +22,9 @@ Perl or other scripting languages.
     caps and old-style numerals with their ASCII equivalents. This is
     useful if your reader cannot render the original characters. Perl
     script.
+  * **halftime:** Print half the time between two specified times on the
+    same day; by default, the current time is used as start time and 22:00
+    (10 pm) is used as end time
   * **listdir:** Create a simple listing of a directory and its
     subdirectories in HTML format. Requires
     [txt2html](http://txt2html.sourceforge.net/). Bash shell script.
