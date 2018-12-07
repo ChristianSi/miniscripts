@@ -17,7 +17,7 @@ PERFORMANCE OF THIS SOFTWARE.
 """
 
 import argparse
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 
 def format_time(t: time) -> str:
@@ -31,7 +31,8 @@ def halftime(start: str = None, end: str = None) -> time:
     Parameters:
 
     * start: the start time in 'HH:MM' format; e.g. '09:01'; defaults to the current time
-    * end: the end time in 'HH:MM' format; defaults to '22:00'
+    * end: the end time in 'HH:MM' format; defaults to '22:00'; if smaller than the start
+      time, assumed to refer to the next day (e.g. '00:00' means: start of tomorrow)
     """
     if start is None:
         startdate = datetime.now()
@@ -41,6 +42,11 @@ def halftime(start: str = None, end: str = None) -> time:
         end = '22:00'
     endtime = datetime.strptime(end, '%H:%M').time()
     delta = datetime.combine(date.today(), endtime) - startdate
+
+    # Add one day to a negative delta (assuming that end time refers to tomorrow)
+    if delta < timedelta(0):
+        delta += timedelta(1)
+
     target_dt = startdate + delta / 2
     return target_dt.time()
 
