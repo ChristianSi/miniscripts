@@ -18,6 +18,8 @@ Perl or other scripting languages.
   * **fehcaptionwriter:** Write captions for the [feh image
     viewer](http://feh.finalrewind.org/) and/or the [bins album
     generator](http://bins.sautret.org/). Perl script.
+  * **fixdoubleencoding:** Fix a file whose content has been corrupted by
+    applying the UTF-8 encoding twice. Python 3 script.
   * **fixepubchars:** Modify epub documents in place by replacing any small
     caps and old-style numerals with their ASCII equivalents. This is
     useful if your reader cannot render the original characters. Perl

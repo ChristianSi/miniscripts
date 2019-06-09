@@ -1,0 +1,47 @@
+#!/usr/bin/python3
+"""Fix a file whose content is corrupted by applying the UTF-8 encoding twice.
+
+Written 2019 by Christian Siefkes.
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted. No rights reserved.
+
+Reads from stdin and writes to stdout. Typical usage:
+
+    fixdoubleencoding < input.txt > output.txt
+
+Double encoding happens when an UTF-8 encoded byte sequence is treated as textual data in
+the Windows-1252 encoding (the most widespread single-byte character encoding) and then
+encoded another time as UTF-8. This causes any non-ASCII characters to be converted into
+sequences of two or more characters, e.g. ä -> Ã¤, ü -> Ã¼, “ -> â€œ.
+
+Sometimes such a replacement sequence is cut off in the middle, e.g. when only the first n
+characters of a string are stored. In such cases, the original cannot be recovered and is
+instead replaced with the Unicode Replacement Character � .
+"""
+
+from sys import stdin, stdout
+
+def fix_double_encoding(instream=stdin, outstream=stdout):
+    """Fixes double UTF-8 encoding, reading from 'instream' and writing to 'outstream'.
+
+    Note that the streams are neither opened nor closed by this method.
+    """
+    for line in instream:
+        bytelist = []
+
+        for char in line:
+            # We have to encode each character separately, since a few octets are undefined
+            # in Windows-1252 (e.g. \x90, \x9d) and must be directly converted to bytes
+            try:
+                byte = char.encode('windows-1252')
+            except UnicodeEncodeError:
+                byte = bytes([ord(char)])
+            bytelist.append(byte)
+
+        bstr = b''.join(bytelist)
+        # 'replace' will print the Unicode Replacement Character if an encoded character is
+        # incomplete
+        print(bstr.decode('utf-8', errors='replace'), end='', file=outstream)
+
+if __name__ == '__main__':
+    fix_double_encoding()
