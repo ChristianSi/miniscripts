@@ -285,7 +285,7 @@ fehcaptionwriter - write captions for the feh image viewer and for bins
 fehcaptionwriter must be called in a directory that contains at least one
 image file and a file called C<captions.yaml> that defines captions for some
 or all of the image files. The program will convert the captions to the format
-expected by feh (L<http://feh.finalrewind.org/>). It will also generate a file
+expected by feh (L<https://feh.finalrewind.org/>). It will also generate a file
 that helps you creating a bins (L<http://bins.sautret.org/>) web album.
 
 =head1 DESCRIPTION

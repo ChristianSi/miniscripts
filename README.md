@@ -16,8 +16,7 @@ Perl or other scripting languages.
   * **depresolve:** Resolve the dependencies of a list of files (in
     Debian-based systems). KornShell (ksh) script.
   * **fehcaptionwriter:** Write captions for the [feh image
-    viewer](http://feh.finalrewind.org/) and/or the [bins album
-    generator](http://bins.sautret.org/). Perl script.
+    viewer](https://feh.finalrewind.org/). Perl script.
   * **fixdoubleencoding:** Fix a file whose content has been corrupted by
     applying the UTF-8 encoding twice. Python 3 script.
   * **fixepubchars:** Modify epub documents in place by replacing any small
@@ -26,7 +25,7 @@ Perl or other scripting languages.
     script.
   * **halftime:** Print half the time between two specified times on the
     same day; by default, the current time is used as start time and 22:00
-    (10 pm) is used as end time
+    (10 pm) is used as end time. Python 3 script.
   * **listdir:** Create a simple listing of a directory and its
     subdirectories in HTML format. Requires
     [txt2html](http://txt2html.sourceforge.net/). Bash shell script.
