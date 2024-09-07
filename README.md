@@ -37,6 +37,9 @@ Perl or other scripting languages.
     (integer), or X to Y (integer, with offset). Perl script.
   * **randomletter:** Generate a random letter (from 'a' to 'z'). Lua
     script.
+  * **scorecalculator:** Calculate the total score of various choices
+    listed in a CSV files by ranking and combining individual scores.
+    Python 3 script.
   * **sentcheck:** List all sentences in a text (plain text document) that
     may be overly complex (containing too many words or too many breaks
     such as commas and dashes). Perl script.

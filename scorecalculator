@@ -1,0 +1,191 @@
+#!/usr/bin/python3
+"""Calculate the total score of various choices by ranking and combining individual scores.
+
+Written 2024 by Christian Siefkes.
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or
+without fee is hereby granted. No rights reserved.
+
+This program reads data from a CSV file and modifies in in place, adding the calculated total
+score and sorting the entries according to it.
+
+The file format is assumed to be as follows:
+
+* The first row is the header row; it is left unchanged.
+* Columns whose header ends in "+)" are assumed to give a ranking where more is better, e.g. a
+  star rating or a rating/review count.
+* Columns whose header ends in "-)" are assumed to give a ranking where less/smaller is better,
+  e.g. a price or distance.
+* The total score will be written to the column with the header "Score". If there is no such
+  column, it will be created after all other columns. If it exists already, its previous
+  contents will be overwritten.
+
+For each of the scoring criteria (column headers ending in "+)" or "-)"), the program assigns
+scores from 1 (best) to n (worst), where n is the total number of items in the file. If several
+items have the same value in one column, they are all given the same score (e.g. if the best
+"stars" score is 5.0 and 3 items have it, they will all get score 1 for that column, while the
+next item will then get score 4 – score counting continues in the usual way).
+
+The calculated total score, as well as its components, will be written into the "Score" column.
+For m scored columns the best possible score is m (1 in each column), hence e.g. "3 (1+1+1)" in
+case of 3 components. Items are sorted by total score and, in case of ties, by the score
+components and then the original order.
+
+The original input file will be renamed by adding ".bak" to its name.
+"""
+
+import csv
+import os
+import re
+import sys
+from typing import List, Set
+
+
+def rank_floats_with_ties(float_list: List[float], ascending: bool = True) -> List[int]:
+    """
+    Ranks a list of floats, assigning the same rank to equal values (ties).
+
+    Parameters:
+
+    * float_list: The list of floats to be ranked
+    * ascending: if True, the smallest value gets rank 1, otherwise the largest value gets rank 1
+
+    Returns a list of ranks corresponding to the original float list.
+    """
+    sort_order = 1 if ascending else -1
+
+    # Sort the indices of the list based on their values
+    sorted_indices = sorted(range(len(float_list)), key=lambda x: sort_order * float_list[x])
+
+    # Create a list to store the ranks
+    ranks = [0] * len(float_list)
+    current_rank = 1
+    prev_value = None
+
+    for pos, index in enumerate(sorted_indices):
+        # If the current value is the same as the previous value, assign the same rank
+        if prev_value is not None and float_list[index] == prev_value:
+            ranks[index] = current_rank
+        else:
+            # Update the rank to be the current position + 1
+            current_rank = pos + 1
+            ranks[index] = current_rank
+        prev_value = float_list[index]
+
+    return ranks
+
+
+def format_total_scores(all_specific_scores: List[List[int]]) -> List[str]:
+    """Calculate and return the total scores based on a nested list of specific scores.
+
+    Each element in the result list will be the total score for that row, followed by its
+    component scores, e.g. '7 (3+2+2)'.
+    """
+    # Initialize a list with the size of the inner lists, filled with empty strings
+    result: List[int] = [''] * len(all_specific_scores[0])
+
+    # Calculate and format each total score
+    for row_idx in range(len(all_specific_scores[0])):
+        total = 0
+        parts = ''
+        for col_idx in range(len(all_specific_scores)):
+            this_score = all_specific_scores[col_idx][row_idx]
+            total += this_score
+            parts += f'+{this_score}'
+
+        parts = parts.lstrip('+')
+        result[row_idx] = f'{total} ({parts})'
+
+    return result
+
+
+def calculate_scores(data: List[List[str]], pos_cols: Set[int], neg_cols: Set[int],
+                     score_col: int) -> List[List[str]]:
+    """Scores the data from a CSV file based on identified negative and positive columns.
+
+    `data` is the original data, `pos_cols` is the set of positive columns (biggest value is
+    best), `neg_cols` is the set of negative columns (smallest value is best), `score_col` is
+    the column into which to write the combined score.
+
+    Returns a copy of the data with the combined score added, but not yet sorted.
+    """
+    col_count = len(data[0])
+    all_specific_scores: List[List[int]] = []
+
+    # Calculate specific scores
+    for idx in range(col_count):
+        if idx in pos_cols or idx in neg_cols:
+            specific_values = [float(row[idx]) for row in data[1:]]  # Skip header
+            ascending = idx in neg_cols
+            specific_scores = rank_floats_with_ties(specific_values, ascending)
+            all_specific_scores.append(specific_scores)
+
+    # Fill rows in score column
+    for idx, score in enumerate(format_total_scores(all_specific_scores), start=1):
+        row = data[idx]
+        # First make sure the row is long enough
+        if score_col >= len(row):
+            row.extend([''] * (score_col + 1 - len(row)))
+        row[score_col] = score
+
+    return data
+
+
+def score_file(filename: str) -> None:
+    """Score a CSV file, finally writing it back with the total score added."""
+    # Read input CSV
+    with open(filename, newline='', encoding='utf-8') as f:
+        data = list(csv.reader(f))
+    header_row = data[0]
+    pos_cols = set()
+    neg_cols = set()
+    score_col = None
+
+    # Check which rows to score positively: "+)", which ones negatively: "-)", and where
+    # to store the total "Score"
+    for idx, header in enumerate(header_row):
+        header = header.strip()
+        if header.endswith('+)'):
+            pos_cols.add(idx)
+        elif header.endswith('-)'):
+            neg_cols.add(idx)
+        elif header == 'Score':
+            score_col = idx
+
+    # Make sure that we got at least one column to score
+    if len(pos_cols) + len(neg_cols) == 0:
+        print('Error: No columns to score found (end the header with "+)" or "-)"')
+        sys.exit(1)
+
+    # Add score column, if needed
+    if score_col is None:
+        score_col = len(header_row)
+        header_row.append('Score')
+        data[0] = header_row
+
+    # Calculate and add scores
+    data = calculate_scores(data, pos_cols, neg_cols, score_col)
+
+    # Sort the data (except for the header) by the integers in the score column, so the sorting
+    # will by chiefly by the total score, with the first, second etc. component scores used as
+    # tiebreakers
+    data[1:] = sorted(data[1:],
+                      key=lambda row: [int(num) for num in re.findall(r'\d+', row[score_col])])
+
+    # Rename original file by adding '.bak'
+    os.replace(filename, filename + '.bak')
+
+    # Write new version of the file that includes the scores
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        csv.writer(f).writerows(data)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        # Score all files specified as command-line arguments
+        for filename in sys.argv[1:]:
+            score_file(filename)
+    else:
+        # Print an error/help message if no arguments are provided
+        print('Error: Specify one or more files to score as arguments')
+        sys.exit(1)
