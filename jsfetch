@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Render a URL with Chromium, convert the resulting HTML to Markdown with xberg,
+# and strip data-URI images.
+set -euo pipefail
+chromium --headless --dump-dom --virtual-time-budget=5000 "$1" |
+  xberg extract --stdin --mime-type text/html --content-format markdown |
+  sed -E 's/!\[[^]]*\]\(data:image\/[^)]*\)//g'
