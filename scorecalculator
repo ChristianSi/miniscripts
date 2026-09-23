@@ -6,39 +6,69 @@ Written 2024 by Christian Siefkes.
 Permission to use, copy, modify, and/or distribute this software for any purpose with or
 without fee is hereby granted. No rights reserved.
 
-This program reads data from a CSV file and modifies in in place, adding the calculated total
-score and sorting the entries according to it.
+This program reads data from a CSV file and writes a scored, sorted version of it to a
+new file whose name is derived from the input file by inserting "-scored" before the
+extension (e.g. "filename.csv" becomes "filename-scored.csv"). With the -i/--in-place
+option, the data is instead written back to the input file, whose previous contents are
+preserved by renaming it (adding ".bak" to its name).
 
 The file format is assumed to be as follows:
 
 * The first row is the header row; it is left unchanged.
-* Columns whose header ends in "+)" are assumed to give a ranking where more is better, e.g. a
-  star rating or a rating/review count.
-* Columns whose header ends in "-)" are assumed to give a ranking where less/smaller is better,
-  e.g. a price or distance.
-* The total score will be written to the column with the header "Score". If there is no such
-  column, it will be created after all other columns. If it exists already, its previous
-  contents will be overwritten.
+* Columns whose header ends in "+)" are assumed to give a ranking where more is better,
+  e.g. a star rating or a rating/review count. Columns whose header ends in "-)" are
+  assumed to give a ranking where less/smaller is better, e.g. a price or distance. A
+  positive integer before the "+" or "-" weights the column: "3+)" (or "(3+)") counts the
+  column as if it was present 3 times, i.e. with 3x the weight of a normal column;
+  "2-)" accordingly means: smaller is better, with twice the weight.
+* The total score will be written to the column with the header "Score"; the "weighted
+  rank", i.e. the total score divided by the sum of all column weights, rounded to one
+  fraction digit (the best possible rank is 1.0), is written to the column with the
+  header "Weighted Rank". Missing columns are created after all other columns, with
+  "Weighted Rank" before "Score"; existing columns are re-used (and overwritten) in
+  their original position.
 
-For each of the scoring criteria (column headers ending in "+)" or "-)"), the program assigns
-scores from 1 (best) to n (worst), where n is the total number of items in the file. If several
-items have the same value in one column, they are all given the same score (e.g. if the best
-"stars" score is 5.0 and 3 items have it, they will all get score 1 for that column, while the
-next item will then get score 4 – score counting continues in the usual way).
+For each of the scoring criteria (column headers ending in a "+)" or "-)" marker,
+optionally preceded by a weight), the program assigns scores from 1 (best) to n (worst),
+where n is the total number of items in the file. If several items have the same value in
+one column, they are all given the same score (e.g. if the best "stars" score is 5.0 and
+3 items have it, they will all get score 1 for that column, while the next item will then
+get score 4 – score counting continues in the usual way).
 
-The calculated total score, as well as its components, will be written into the "Score" column.
-For m scored columns the best possible score is m (1 in each column), hence e.g. "3 (1+1+1)" in
-case of 3 components. Items are sorted by total score and, in case of ties, by the score
-components and then the original order.
+Missing values are handled robustly: a field that is empty, "?", or a dash/hyphen ("-",
+"–", "—", "−") is treated as the worst possible value. All missing values in a column
+share the same rank, below all actual values. For ranking, a number just beyond the range
+of the actual values is substituted internally (e.g. 0 instead of missing values in a "+"
+column whose values range from 1 to 6, or 7 in a "-)" column); it is never written to the
+output. Instead, the input value is copied for missing fields, but an empty input field
+is written as "?" (question mark). Any other value that cannot be parsed as a number
+triggers an error.
 
-The original input file will be renamed by adding ".bak" to its name.
+The calculated total score, as well as its components, will be written into the "Score"
+column. Each component is the rank in one scoring column, written as "weight*rank" for
+weighted columns and as a bare rank for unweighted ones, e.g. "11 (2*3+2+3*1)" means rank
+3 in a column of weight 2, rank 2 in an unweighted column, and rank 1 in a column of
+weight 3. The best possible total score is the sum of all weights (1 per unweighted
+column), hence e.g. "3 (1+1+1)" for 3 unweighted components, or "4 (2*1+1+1)" for two
+unweighted columns plus one with weight 2, all best-ranked. Items are sorted by total
+score and, in case of ties, by the score components and then the original order.
 """
 
+import argparse
 import csv
+import math
 import os
 import re
 import sys
-from typing import List, Set
+from typing import Dict, List, Tuple
+
+# Field contents (after stripping whitespace) that are treated as "missing" values
+MISSING_VALUES = frozenset({'', '?', '-', '–', '—', '−'})
+
+# Matches a weighted scoring marker at the end of a column header: an optional integer
+# weight, then "+" or "-", then ")", preceded by the start of the header, "(" or
+# whitespace (so that e.g. "Room2-" is not mistaken for a weighted marker)
+SCORING_MARKER = re.compile(r'(?:^|[(\s])(\d*)([+-])\)$')
 
 
 def rank_floats_with_ties(float_list: List[float], ascending: bool = True) -> List[int]:
@@ -75,117 +105,230 @@ def rank_floats_with_ties(float_list: List[float], ascending: bool = True) -> Li
     return ranks
 
 
-def format_total_scores(all_specific_scores: List[List[int]]) -> List[str]:
-    """Calculate and return the total scores based on a nested list of specific scores.
+def format_total_scores(weighted_scores: List[Tuple[int, List[int]]]
+                        ) -> Tuple[List[str], List[str], List[List[int]]]:
+    """Calculate and format the total scores based on a list of weighted specific scores.
 
-    Each element in the result list will be the total score for that row, followed by its
-    component scores, e.g. '7 (3+2+2)'.
+    `weighted_scores` is a list of (weight, rank list) pairs, one per scoring column.
+
+    Returns (score strings, weighted ranks, sort keys): each score string is the total
+    score for a row, followed by its component scores, e.g. '11 (2*3+2+3*1)' (shown as
+    "weight*rank" for weighted columns and as a bare rank for unweighted ones); each
+    weighted rank is the total score divided by the sum of all weights, rounded to one
+    fraction digit (the best possible rank is 1.0); each sort key is
+    [total, component 1, component 2, ...] for use as a tiebreaking sort key.
     """
-    # Initialize a list with the size of the inner lists, filled with empty strings
-    result: List[int] = [''] * len(all_specific_scores[0])
+    weight_sum = sum(weight for weight, _ in weighted_scores)
+    score_strings: List[str] = []
+    weighted_ranks: List[str] = []
+    sort_keys: List[List[int]] = []
+    row_count = len(weighted_scores[0][1])
 
     # Calculate and format each total score
-    for row_idx in range(len(all_specific_scores[0])):
+    for row_idx in range(row_count):
         total = 0
         parts = ''
-        for col_idx in range(len(all_specific_scores)):
-            this_score = all_specific_scores[col_idx][row_idx]
-            total += this_score
-            parts += f'+{this_score}'
+        key: List[int] = []
+        for weight, ranks in weighted_scores:
+            rank = ranks[row_idx]
+            total += weight * rank
+            key.append(weight * rank)
+            parts += f'+{weight}*{rank}' if weight > 1 else f'+{rank}'
 
-        parts = parts.lstrip('+')
-        result[row_idx] = f'{total} ({parts})'
+        score_strings.append(f'{total} ({parts.lstrip("+")})')
+        weighted_ranks.append(f'{total / weight_sum:.1f}')
+        sort_keys.append([total] + key)
 
-    return result
+    return score_strings, weighted_ranks, sort_keys
 
 
-def calculate_scores(data: List[List[str]], pos_cols: Set[int], neg_cols: Set[int],
-                     score_col: int) -> List[List[str]]:
+def calculate_scores(data: List[List[str]], pos_weights: Dict[int, int],
+                     neg_weights: Dict[int, int],
+                     score_col: int,
+                     rank_col: int) -> Tuple[List[List[str]], List[List[int]]]:
     """Scores the data from a CSV file based on identified negative and positive columns.
 
-    `data` is the original data, `pos_cols` is the set of positive columns (biggest value is
-    best), `neg_cols` is the set of negative columns (smallest value is best), `score_col` is
-    the column into which to write the combined score.
+    `data` is the original data, `pos_weights` maps positive columns (biggest value is
+    best) to their weight, `neg_weights` maps negative columns (smallest value is best)
+    to their weight, `score_col` is the column into which to write the combined score
+    and `rank_col` the column for the weighted rank (total score / sum of all weights).
 
-    Returns a copy of the data with the combined score added, but not yet sorted.
+    Missing values (see MISSING_VALUES) are ranked as the worst possible value, but their
+    output field is restored to the input value afterwards ("?" for empty fields). Raises
+    ValueError if a non-missing value cannot be parsed as a number.
+
+    Returns the data with the combined score added, but not yet sorted, plus a list of
+    sort keys (total and component scores per row) for the final sorting.
     """
     col_count = len(data[0])
-    all_specific_scores: List[List[int]] = []
+    weighted_scores: List[Tuple[int, List[int]]] = []
 
     # Calculate specific scores
     for idx in range(col_count):
-        if idx in pos_cols or idx in neg_cols:
-            specific_values = [float(row[idx]) for row in data[1:]]  # Skip header
-            ascending = idx in neg_cols
-            specific_scores = rank_floats_with_ties(specific_values, ascending)
-            all_specific_scores.append(specific_scores)
+        if idx not in pos_weights and idx not in neg_weights:
+            continue
+        ascending = idx in neg_weights
+        values: List[float] = []
+        missing_rows: List[int] = []
+        actual_values: List[float] = []
+        for row_idx, row in enumerate(data[1:]):  # Skip header
+            field = row[idx].strip() if idx < len(row) else ''
+            if field in MISSING_VALUES:
+                values.append(0.0)  # Placeholder; replaced by the "worst value" below
+                missing_rows.append(row_idx)
+                continue
+            try:
+                value = float(field)
+            except ValueError:
+                raise ValueError(
+                    f'cannot parse value {field!r} in row {row_idx + 2}, column '
+                    f'{data[0][idx].strip()!r} as a number') from None
+            if not math.isfinite(value):
+                raise ValueError(
+                    f'value {field!r} in row {row_idx + 2}, column '
+                    f'{data[0][idx].strip()!r} is not a finite number') from None
+            values.append(value)
+            actual_values.append(value)
 
-    # Fill rows in score column
-    for idx, score in enumerate(format_total_scores(all_specific_scores), start=1):
+        # Rank missing values as "worst possible": substitute a number beyond the range of
+        # the actual values (e.g. 0 for missing values in a "+" column with values 1-6)
+        if actual_values:
+            worst_value = max(actual_values) + 1 if ascending else min(actual_values) - 1
+        else:
+            worst_value = 0.0
+        for row_idx in missing_rows:
+            values[row_idx] = worst_value
+
+        specific_scores = rank_floats_with_ties(values, ascending)
+        # A weighted column counts with the given weight (as if present `weight` times)
+        weight = pos_weights[idx] if idx in pos_weights else neg_weights[idx]
+        weighted_scores.append((weight, specific_scores))
+
+        # Restore the input value in the output for missing fields ("?" for empty fields)
+        for row_idx in missing_rows:
+            row = data[row_idx + 1]
+            if idx >= len(row):
+                row.extend([''] * (idx + 1 - len(row)))
+            original = row[idx]
+            row[idx] = original if original.strip() else '?'
+
+    # Fill rows in the weighted rank and score columns
+    score_strings, weighted_ranks, sort_keys = format_total_scores(weighted_scores)
+    for idx, (score, weighted_rank) in enumerate(zip(score_strings, weighted_ranks), start=1):
         row = data[idx]
         # First make sure the row is long enough
-        if score_col >= len(row):
-            row.extend([''] * (score_col + 1 - len(row)))
+        needed = max(score_col, rank_col) + 1
+        if needed > len(row):
+            row.extend([''] * (needed - len(row)))
         row[score_col] = score
+        row[rank_col] = weighted_rank
 
-    return data
+    return data, sort_keys
 
 
-def score_file(filename: str) -> None:
-    """Score a CSV file, finally writing it back with the total score added."""
+def scored_filename(filename: str) -> str:
+    """Return the output filename, inserting "-scored" before the extension."""
+    root, ext = os.path.splitext(filename)
+    return f'{root}-scored{ext}'
+
+
+def score_file(filename: str, in_place: bool = False) -> None:
+    """Score a CSV file, writing the result to a separate file or (with -i) in place."""
     # Read input CSV
     with open(filename, newline='', encoding='utf-8') as f:
         data = list(csv.reader(f))
     header_row = data[0]
-    pos_cols = set()
-    neg_cols = set()
+    pos_weights: Dict[int, int] = {}
+    neg_weights: Dict[int, int] = {}
     score_col = None
+    rank_col = None
 
-    # Check which rows to score positively: "+)", which ones negatively: "-)", and where
-    # to store the total "Score"
-    for idx, header in enumerate(header_row):
-        header = header.strip()
-        if header.endswith('+)'):
-            pos_cols.add(idx)
+    # Check which columns to score positively ("3+)", "(+)", ...) or negatively
+    # ("2-)", "(-)", ...) and with which weight, and where to store the "Weighted Rank"
+    # and the total "Score"
+    for idx, raw_header in enumerate(header_row):
+        header = raw_header.strip()
+        sign = None
+        weight = 1
+        marker = SCORING_MARKER.search(header)
+        if marker:
+            weight = int(marker.group(1)) if marker.group(1) else 1
+            sign = marker.group(2)
+            if weight < 1:
+                print(f'Error: Invalid weight 0 in column header {header!r}')
+                sys.exit(1)
+        elif header.endswith('+)'):
+            sign = '+'
         elif header.endswith('-)'):
-            neg_cols.add(idx)
+            sign = '-'
+        if sign == '+':
+            pos_weights[idx] = weight
+        elif sign == '-':
+            neg_weights[idx] = weight
         elif header == 'Score':
             score_col = idx
+        elif header == 'Weighted Rank':
+            rank_col = idx
 
     # Make sure that we got at least one column to score
-    if len(pos_cols) + len(neg_cols) == 0:
-        print('Error: No columns to score found (end the header with "+)" or "-)"')
+    if not pos_weights and not neg_weights:
+        print('Error: No columns to score found (end the header with "+)" or "-)", '
+              'optionally preceded by a weight, e.g. "2+)")')
         sys.exit(1)
 
-    # Add score column, if needed
+    # Add weighted rank and/or score column, if needed; a newly created weighted rank
+    # column goes before the score column
     if score_col is None:
-        score_col = len(header_row)
-        header_row.append('Score')
-        data[0] = header_row
+        if rank_col is None:
+            rank_col = len(header_row)
+            score_col = rank_col + 1
+            header_row.extend(['Weighted Rank', 'Score'])
+        else:
+            score_col = len(header_row)
+            header_row.append('Score')
+    elif rank_col is None:
+        # Insert the weighted rank column before the score column, shifting the data
+        rank_col = score_col
+        score_col += 1
+        header_row.insert(rank_col, 'Weighted Rank')
+        for row in data[1:]:
+            if len(row) < rank_col:
+                row.extend([''] * (rank_col - len(row)))
+            row.insert(rank_col, '')
+    data[0] = header_row
 
     # Calculate and add scores
-    data = calculate_scores(data, pos_cols, neg_cols, score_col)
+    try:
+        data, sort_keys = calculate_scores(data, pos_weights, neg_weights, score_col,
+                                           rank_col)
+    except ValueError as err:
+        print(f'Error in {filename}: {err}')
+        sys.exit(1)
 
-    # Sort the data (except for the header) by the integers in the score column, so the sorting
-    # will by chiefly by the total score, with the first, second etc. component scores used as
-    # tiebreakers
-    data[1:] = sorted(data[1:],
-                      key=lambda row: [int(num) for num in re.findall(r'\d+', row[score_col])])
+    # Sort the data (except for the header) chiefly by the total score, with the component
+    # scores used as tiebreakers (rows tied in everything keep their original order)
+    data[1:] = [row for _, row in sorted(zip(sort_keys, data[1:]), key=lambda pair: pair[0])]
 
-    # Rename original file by adding '.bak'
-    os.replace(filename, filename + '.bak')
+    if in_place:
+        # Rename original file by adding '.bak'
+        os.replace(filename, filename + '.bak')
+        output_name = filename
+    else:
+        output_name = scored_filename(filename)
 
-    # Write new version of the file that includes the scores
-    with open(filename, 'w', newline='', encoding='utf-8') as f:
+    # Write the scored version of the file
+    with open(output_name, 'w', newline='', encoding='utf-8') as f:
         csv.writer(f).writerows(data)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        # Score all files specified as command-line arguments
-        for filename in sys.argv[1:]:
-            score_file(filename)
-    else:
-        # Print an error/help message if no arguments are provided
-        print('Error: Specify one or more files to score as arguments')
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='Rank and score the rows of CSV file(s), writing the result to a new '
+                    '"<name>-scored.<ext>" file (or in place with -i/--in-place).')
+    parser.add_argument('files', nargs='+', metavar='FILE', help='CSV file(s) to score')
+    parser.add_argument('-i', '--in-place', action='store_true',
+                        help='modify the input file in place instead (the original is '
+                             'renamed by adding ".bak")')
+    args = parser.parse_args()
+    for filename in args.files:
+        score_file(filename, in_place=args.in_place)
