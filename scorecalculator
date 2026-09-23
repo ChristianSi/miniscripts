@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Calculate the total score of various choices by ranking and combining individual scores.
 
-Written 2024 by Christian Siefkes.
+Copyright (c) 2024–2026 Christian Siefkes.
 
 Permission to use, copy, modify, and/or distribute this software for any purpose with or
 without fee is hereby granted. No rights reserved.
