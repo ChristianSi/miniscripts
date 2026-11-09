@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
-# Render a URL with Chromium, convert the resulting HTML to Markdown with xberg,
-# and strip data-URI images.
+# Render a URL with Chromium (or Google Chrome) and convert the resulting HTML
+# to plain text with w3m.
 set -euo pipefail
-chromium --headless --dump-dom --virtual-time-budget=5000 "$1" |
-  xberg extract --stdin --mime-type text/html --content-format markdown |
-  sed -E 's/!\[[^]]*\]\(data:image\/[^)]*\)//g'
+
+browser=
+for candidate in chromium chromium-browser google-chrome google-chrome-stable; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    browser=$candidate
+    break
+  fi
+done
+if [[ -z $browser ]]; then
+  echo "jsfetch: no Chromium or Google Chrome found" >&2
+  exit 1
+fi
+
+# --log-level=3: only report fatal errors (suppresses noisy NSS messages etc.)
+# --disable-3d-apis: no WebGL (not needed for text; avoids software-WebGL warnings)
+"$browser" --headless --log-level=3 --disable-3d-apis --dump-dom --virtual-time-budget=5000 "$1" |
+  w3m -dump -cols 120 -T text/html
