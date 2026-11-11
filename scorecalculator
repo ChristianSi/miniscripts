@@ -14,44 +14,63 @@ preserved by renaming it (adding ".bak" to its name).
 
 The file format is assumed to be as follows:
 
-* The first row is the header row; it is left unchanged.
+* The first row is the header row; it is left unchanged (except that an old "Score"
+  column may be renamed, see below).
 * Columns whose header ends in "+)" are assumed to give a ranking where more is better,
   e.g. a star rating or a rating/review count. Columns whose header ends in "-)" are
   assumed to give a ranking where less/smaller is better, e.g. a price or distance. A
   positive integer before the "+" or "-" weights the column: "3+)" (or "(3+)") counts the
   column as if it was present 3 times, i.e. with 3x the weight of a normal column;
-  "2-)" accordingly means: smaller is better, with twice the weight.
-* The total score will be written to the column with the header "Score"; the "weighted
-  rank", i.e. the total score divided by the sum of all column weights, rounded to one
-  fraction digit (the best possible rank is 1.0), is written to the column with the
-  header "Weighted Rank". Missing columns are created after all other columns, with
-  "Weighted Rank" before "Score"; existing columns are re-used (and overwritten) in
-  their original position.
+  "2-)" accordingly means: smaller is better, with twice the weight. A "?" after the "+"
+  or "-" (e.g. "(+?)" or "(2-?)") means that missing values in this column are skipped
+  instead of being counted as worst (see below).
+* The weighted rank of each row is written to the column with the header "Weighted
+  Rank", the components it is calculated from to the column with the header
+  "Components". Missing columns are created after all other columns, with "Weighted
+  Rank" before "Components"; existing columns are re-used (and overwritten) in their
+  original position. If there is no "Components" column, but a "Score" column (as
+  written by earlier versions of this program), the latter is re-used and renamed to
+  "Components".
 
-For each of the scoring criteria (column headers ending in a "+)" or "-)" marker,
-optionally preceded by a weight), the program assigns scores from 1 (best) to n (worst),
-where n is the total number of items in the file. If several items have the same value in
-one column, they are all given the same score (e.g. if the best "stars" score is 5.0 and
-3 items have it, they will all get score 1 for that column, while the next item will then
-get score 4 – score counting continues in the usual way).
+For each of the scoring criteria (column headers ending in a "+)", "-)", "+?)", or "-?)"
+marker, optionally preceded by a weight), the program assigns ranks from 1 (best) to n
+(worst), where n is the number of items ranked in that column. If several items have the
+same value in one column, they are all given the same rank (e.g. if the best "stars"
+score is 5.0 and 3 items have it, they will all get rank 1 for that column, while the
+next item will then get rank 4 – rank counting continues in the usual way).
 
-Missing values are handled robustly: a field that is empty, "?", or a dash/hyphen ("-",
-"–", "—", "−") is treated as the worst possible value. All missing values in a column
-share the same rank, below all actual values. For ranking, a number just beyond the range
-of the actual values is substituted internally (e.g. 0 instead of missing values in a "+"
-column whose values range from 1 to 6, or 7 in a "-)" column); it is never written to the
-output. Instead, the input value is copied for missing fields, but an empty input field
-is written as "?" (question mark). Any other value that cannot be parsed as a number
+A field that is empty, "?", or a dash/hyphen ("-", "–", "—", "−") is treated as a missing
+value. How missing values are handled depends on the column marker:
+
+* In "+)" and "-)" columns, missing values are treated as the worst possible value. All
+  missing values in a column share the same rank, below all actual values. For ranking,
+  a number just beyond the range of the actual values is substituted internally (e.g. 0
+  instead of missing values in a "+" column whose values range from 1 to 6, or 7 in a
+  "-)" column); it is never written to the output.
+* In "+?)" and "-?)" columns, missing values are skipped: they get no rank and don't
+  count towards the weighted rank of their row. Only the actual values are ranked (from
+  1 to the number of actual values).
+
+In either case, the input value is copied for missing fields, but an empty input field is
+written as "?" (question mark). Any other value that cannot be parsed as a number
 triggers an error.
 
-The calculated total score, as well as its components, will be written into the "Score"
-column. Each component is the rank in one scoring column, written as "weight*rank" for
-weighted columns and as a bare rank for unweighted ones, e.g. "11 (2*3+2+3*1)" means rank
-3 in a column of weight 2, rank 2 in an unweighted column, and rank 1 in a column of
-weight 3. The best possible total score is the sum of all weights (1 per unweighted
-column), hence e.g. "3 (1+1+1)" for 3 unweighted components, or "4 (2*1+1+1)" for two
-unweighted columns plus one with weight 2, all best-ranked. Items are sorted by total
-score and, in case of ties, by the score components and then the original order.
+The weighted rank of a row is the sum of its ranks, each multiplied by the weight of its
+column, divided by the sum of the weights of all columns in which the row was ranked
+(i.e. skipped missing values don't count), rounded to one fraction digit. Hence the best
+possible weighted rank is always 1.0, also for rows with skipped values. The
+"Components" column shows the calculation: each rank is written as "weight*rank" for
+weighted columns and as a bare rank for unweighted ones, skipped values as "?", followed
+by the sum of the counted weights. E.g. "(2*3+2+3*1)/6" means rank 3 in a column of
+weight 2, rank 2 in an unweighted column, and rank 1 in a column of weight 3, giving a
+weighted rank of 11/6 ≈ 1.8; "(2*3+2+?)/3" means the same, except that the value in the
+last column was missing and skipped, giving a weighted rank of 8/3 ≈ 2.7. A row whose
+values have all been skipped gets no weighted rank ("?").
+
+Items are sorted by their exact (unrounded) weighted rank. Ties are broken by preferring
+items with a higher sum of counted weights (i.e. fewer skipped values), then by the
+weighted component ranks, and finally by the original order. Items without weighted rank
+come last.
 """
 
 import argparse
@@ -60,15 +79,27 @@ import math
 import os
 import re
 import sys
-from typing import Dict, List, Tuple
+from fractions import Fraction
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 # Field contents (after stripping whitespace) that are treated as "missing" values
 MISSING_VALUES = frozenset({'', '?', '-', '–', '—', '−'})
 
 # Matches a weighted scoring marker at the end of a column header: an optional integer
-# weight, then "+" or "-", then ")", preceded by the start of the header, "(" or
-# whitespace (so that e.g. "Room2-" is not mistaken for a weighted marker)
-SCORING_MARKER = re.compile(r'(?:^|[(\s])(\d*)([+-])\)$')
+# weight, then "+" or "-", then an optional "?" (skip missing values), then ")", preceded
+# by the start of the header, "(" or whitespace (so that e.g. "Room2-)" is not mistaken
+# for a weighted marker)
+SCORING_MARKER = re.compile(r'(?:^|[(\s])(\d*)([+-])(\??)\)$')
+
+# Matches an unweighted scoring marker at the end of a column header (e.g. "Stars+)")
+PLAIN_MARKER = re.compile(r'([+-])(\??)\)$')
+
+
+class Criterion(NamedTuple):
+    """A scoring column: its weight, sort direction, and handling of missing values."""
+    weight: int
+    ascending: bool  # True if smaller is better ("-"), False if bigger is better ("+")
+    skip_missing: bool  # True if missing values are skipped ("?") rather than worst
 
 
 def rank_floats_with_ties(float_list: List[float], ascending: bool = True) -> List[int]:
@@ -105,76 +136,87 @@ def rank_floats_with_ties(float_list: List[float], ascending: bool = True) -> Li
     return ranks
 
 
-def format_total_scores(weighted_scores: List[Tuple[int, List[int]]]
-                        ) -> Tuple[List[str], List[str], List[List[int]]]:
-    """Calculate and format the total scores based on a list of weighted specific scores.
+SortKey = Tuple[Union[Fraction, float], int, List[float]]
 
-    `weighted_scores` is a list of (weight, rank list) pairs, one per scoring column.
 
-    Returns (score strings, weighted ranks, sort keys): each score string is the total
-    score for a row, followed by its component scores, e.g. '11 (2*3+2+3*1)' (shown as
-    "weight*rank" for weighted columns and as a bare rank for unweighted ones); each
-    weighted rank is the total score divided by the sum of all weights, rounded to one
-    fraction digit (the best possible rank is 1.0); each sort key is
-    [total, component 1, component 2, ...] for use as a tiebreaking sort key.
+def format_components(column_ranks: List[Tuple[int, List[Optional[int]]]]
+                      ) -> Tuple[List[str], List[str], List[SortKey]]:
+    """Calculate and format the weighted ranks based on the ranks in each scoring column.
+
+    `column_ranks` is a list of (weight, rank list) pairs, one per scoring column; a rank
+    of None means that the value is missing and skipped.
+
+    Returns (component strings, weighted ranks, sort keys): each component string shows
+    the calculation of the weighted rank of a row, e.g. '(2*3+2+?)/3' (ranks are shown as
+    "weight*rank" for weighted columns and as a bare rank for unweighted ones, skipped
+    values as "?", followed by the sum of the counted weights); each weighted rank is the
+    weighted sum of ranks divided by the sum of the counted weights, rounded to one
+    fraction digit (the best possible rank is 1.0), or "?" if all values were skipped;
+    each sort key is (exact weighted rank, negated weight sum, weighted component ranks)
+    for use as a tiebreaking sort key.
     """
-    weight_sum = sum(weight for weight, _ in weighted_scores)
-    score_strings: List[str] = []
+    component_strings: List[str] = []
     weighted_ranks: List[str] = []
-    sort_keys: List[List[int]] = []
-    row_count = len(weighted_scores[0][1])
+    sort_keys: List[SortKey] = []
+    row_count = len(column_ranks[0][1])
 
-    # Calculate and format each total score
     for row_idx in range(row_count):
         total = 0
-        parts = ''
-        key: List[int] = []
-        for weight, ranks in weighted_scores:
+        weight_sum = 0
+        parts: List[str] = []
+        key_parts: List[float] = []
+        for weight, ranks in column_ranks:
             rank = ranks[row_idx]
+            if rank is None:
+                parts.append('?')
+                key_parts.append(math.inf)
+                continue
             total += weight * rank
-            key.append(weight * rank)
-            parts += f'+{weight}*{rank}' if weight > 1 else f'+{rank}'
+            weight_sum += weight
+            parts.append(f'{weight}*{rank}' if weight > 1 else str(rank))
+            key_parts.append(weight * rank)
 
-        score_strings.append(f'{total} ({parts.lstrip("+")})')
-        weighted_ranks.append(f'{total / weight_sum:.1f}')
-        sort_keys.append([total] + key)
+        component_strings.append(f'({"+".join(parts)})/{weight_sum}')
+        exact_rank: Union[Fraction, float]
+        if weight_sum:
+            exact_rank = Fraction(total, weight_sum)
+            weighted_ranks.append(f'{float(exact_rank):.1f}')
+        else:
+            exact_rank = math.inf
+            weighted_ranks.append('?')
+        sort_keys.append((exact_rank, -weight_sum, key_parts))
 
-    return score_strings, weighted_ranks, sort_keys
+    return component_strings, weighted_ranks, sort_keys
 
 
-def calculate_scores(data: List[List[str]], pos_weights: Dict[int, int],
-                     neg_weights: Dict[int, int],
-                     score_col: int,
-                     rank_col: int) -> Tuple[List[List[str]], List[List[int]]]:
-    """Scores the data from a CSV file based on identified negative and positive columns.
+def calculate_scores(data: List[List[str]], criteria: Dict[int, Criterion],
+                     components_col: int,
+                     rank_col: int) -> Tuple[List[List[str]], List[SortKey]]:
+    """Scores the data from a CSV file based on the identified scoring columns.
 
-    `data` is the original data, `pos_weights` maps positive columns (biggest value is
-    best) to their weight, `neg_weights` maps negative columns (smallest value is best)
-    to their weight, `score_col` is the column into which to write the combined score
-    and `rank_col` the column for the weighted rank (total score / sum of all weights).
+    `data` is the original data, `criteria` maps the scoring columns to their criteria
+    (weight, direction, handling of missing values), `components_col` is the column into
+    which to write the components of the weighted rank and `rank_col` the column for the
+    weighted rank itself.
 
-    Missing values (see MISSING_VALUES) are ranked as the worst possible value, but their
-    output field is restored to the input value afterwards ("?" for empty fields). Raises
-    ValueError if a non-missing value cannot be parsed as a number.
+    Missing values (see MISSING_VALUES) are either ranked as the worst possible value or
+    skipped (left unranked), depending on the criterion; their output field is restored
+    to the input value afterwards ("?" for empty fields). Raises ValueError if a
+    non-missing value cannot be parsed as a number.
 
-    Returns the data with the combined score added, but not yet sorted, plus a list of
-    sort keys (total and component scores per row) for the final sorting.
+    Returns the data with the weighted rank and its components added, but not yet sorted,
+    plus a list of sort keys for the final sorting.
     """
-    col_count = len(data[0])
-    weighted_scores: List[Tuple[int, List[int]]] = []
+    column_ranks: List[Tuple[int, List[Optional[int]]]] = []
 
-    # Calculate specific scores
-    for idx in range(col_count):
-        if idx not in pos_weights and idx not in neg_weights:
-            continue
-        ascending = idx in neg_weights
-        values: List[float] = []
+    # Calculate the ranks in each scoring column
+    for idx, criterion in sorted(criteria.items()):
+        values: List[Optional[float]] = []
         missing_rows: List[int] = []
-        actual_values: List[float] = []
         for row_idx, row in enumerate(data[1:]):  # Skip header
             field = row[idx].strip() if idx < len(row) else ''
             if field in MISSING_VALUES:
-                values.append(0.0)  # Placeholder; replaced by the "worst value" below
+                values.append(None)
                 missing_rows.append(row_idx)
                 continue
             try:
@@ -188,21 +230,27 @@ def calculate_scores(data: List[List[str]], pos_weights: Dict[int, int],
                     f'value {field!r} in row {row_idx + 2}, column '
                     f'{data[0][idx].strip()!r} is not a finite number') from None
             values.append(value)
-            actual_values.append(value)
 
-        # Rank missing values as "worst possible": substitute a number beyond the range of
-        # the actual values (e.g. 0 for missing values in a "+" column with values 1-6)
-        if actual_values:
-            worst_value = max(actual_values) + 1 if ascending else min(actual_values) - 1
+        actual_values = [value for value in values if value is not None]
+        ranks: List[Optional[int]]
+        if criterion.skip_missing:
+            # Rank only the actual values, leaving missing values unranked (None)
+            actual_ranks = iter(rank_floats_with_ties(actual_values, criterion.ascending))
+            ranks = [None if value is None else next(actual_ranks) for value in values]
         else:
-            worst_value = 0.0
-        for row_idx in missing_rows:
-            values[row_idx] = worst_value
-
-        specific_scores = rank_floats_with_ties(values, ascending)
+            # Rank missing values as "worst possible": substitute a number beyond the
+            # range of the actual values (e.g. 0 for missing values in a "+" column with
+            # values 1-6)
+            if actual_values:
+                worst_value = (max(actual_values) + 1 if criterion.ascending
+                               else min(actual_values) - 1)
+            else:
+                worst_value = 0.0
+            ranks = list(rank_floats_with_ties(
+                [worst_value if value is None else value for value in values],
+                criterion.ascending))
         # A weighted column counts with the given weight (as if present `weight` times)
-        weight = pos_weights[idx] if idx in pos_weights else neg_weights[idx]
-        weighted_scores.append((weight, specific_scores))
+        column_ranks.append((criterion.weight, ranks))
 
         # Restore the input value in the output for missing fields ("?" for empty fields)
         for row_idx in missing_rows:
@@ -212,15 +260,16 @@ def calculate_scores(data: List[List[str]], pos_weights: Dict[int, int],
             original = row[idx]
             row[idx] = original if original.strip() else '?'
 
-    # Fill rows in the weighted rank and score columns
-    score_strings, weighted_ranks, sort_keys = format_total_scores(weighted_scores)
-    for idx, (score, weighted_rank) in enumerate(zip(score_strings, weighted_ranks), start=1):
+    # Fill rows in the weighted rank and components columns
+    component_strings, weighted_ranks, sort_keys = format_components(column_ranks)
+    for idx, (components, weighted_rank) in enumerate(
+            zip(component_strings, weighted_ranks), start=1):
         row = data[idx]
         # First make sure the row is long enough
-        needed = max(score_col, rank_col) + 1
+        needed = max(components_col, rank_col) + 1
         if needed > len(row):
             row.extend([''] * (needed - len(row)))
-        row[score_col] = score
+        row[components_col] = components
         row[rank_col] = weighted_rank
 
     return data, sort_keys
@@ -238,58 +287,63 @@ def score_file(filename: str, in_place: bool = False) -> None:
     with open(filename, newline='', encoding='utf-8') as f:
         data = list(csv.reader(f))
     header_row = data[0]
-    pos_weights: Dict[int, int] = {}
-    neg_weights: Dict[int, int] = {}
-    score_col = None
+    criteria: Dict[int, Criterion] = {}
+    components_col = None
+    legacy_score_col = None
     rank_col = None
 
     # Check which columns to score positively ("3+)", "(+)", ...) or negatively
-    # ("2-)", "(-)", ...) and with which weight, and where to store the "Weighted Rank"
-    # and the total "Score"
+    # ("2-)", "(-)", ...), with which weight, and whether to skip missing values ("+?)",
+    # "(2-?)", ...), and where to store the "Weighted Rank" and its "Components"
     for idx, raw_header in enumerate(header_row):
         header = raw_header.strip()
-        sign = None
-        weight = 1
+        weight_str = ''
         marker = SCORING_MARKER.search(header)
         if marker:
-            weight = int(marker.group(1)) if marker.group(1) else 1
-            sign = marker.group(2)
+            weight_str, sign, skip = marker.groups()
+        else:
+            marker = PLAIN_MARKER.search(header)
+            if marker:
+                sign, skip = marker.groups()
+        if marker:
+            weight = int(weight_str) if weight_str else 1
             if weight < 1:
                 print(f'Error: Invalid weight 0 in column header {header!r}')
                 sys.exit(1)
-        elif header.endswith('+)'):
-            sign = '+'
-        elif header.endswith('-)'):
-            sign = '-'
-        if sign == '+':
-            pos_weights[idx] = weight
-        elif sign == '-':
-            neg_weights[idx] = weight
+            criteria[idx] = Criterion(weight, sign == '-', skip == '?')
+        elif header == 'Components':
+            components_col = idx
         elif header == 'Score':
-            score_col = idx
+            legacy_score_col = idx
         elif header == 'Weighted Rank':
             rank_col = idx
 
     # Make sure that we got at least one column to score
-    if not pos_weights and not neg_weights:
+    if not criteria:
         print('Error: No columns to score found (end the header with "+)" or "-)", '
-              'optionally preceded by a weight, e.g. "2+)")')
+              'optionally preceded by a weight and followed by "?" to skip missing '
+              'values, e.g. "2+)" or "(-?)")')
         sys.exit(1)
 
-    # Add weighted rank and/or score column, if needed; a newly created weighted rank
-    # column goes before the score column
-    if score_col is None:
+    # Re-use a "Score" column written by earlier versions as "Components" column
+    if components_col is None and legacy_score_col is not None:
+        components_col = legacy_score_col
+        header_row[components_col] = 'Components'
+
+    # Add weighted rank and/or components column, if needed; a newly created weighted
+    # rank column goes before the components column
+    if components_col is None:
         if rank_col is None:
             rank_col = len(header_row)
-            score_col = rank_col + 1
-            header_row.extend(['Weighted Rank', 'Score'])
+            components_col = rank_col + 1
+            header_row.extend(['Weighted Rank', 'Components'])
         else:
-            score_col = len(header_row)
-            header_row.append('Score')
+            components_col = len(header_row)
+            header_row.append('Components')
     elif rank_col is None:
-        # Insert the weighted rank column before the score column, shifting the data
-        rank_col = score_col
-        score_col += 1
+        # Insert the weighted rank column before the components column, shifting the data
+        rank_col = components_col
+        components_col += 1
         header_row.insert(rank_col, 'Weighted Rank')
         for row in data[1:]:
             if len(row) < rank_col:
@@ -297,16 +351,16 @@ def score_file(filename: str, in_place: bool = False) -> None:
             row.insert(rank_col, '')
     data[0] = header_row
 
-    # Calculate and add scores
+    # Calculate and add weighted ranks
     try:
-        data, sort_keys = calculate_scores(data, pos_weights, neg_weights, score_col,
-                                           rank_col)
+        data, sort_keys = calculate_scores(data, criteria, components_col, rank_col)
     except ValueError as err:
         print(f'Error in {filename}: {err}')
         sys.exit(1)
 
-    # Sort the data (except for the header) chiefly by the total score, with the component
-    # scores used as tiebreakers (rows tied in everything keep their original order)
+    # Sort the data (except for the header) chiefly by the weighted rank, with the weight
+    # sum and the component ranks used as tiebreakers (rows tied in everything keep their
+    # original order)
     data[1:] = [row for _, row in sorted(zip(sort_keys, data[1:]), key=lambda pair: pair[0])]
 
     if in_place:
